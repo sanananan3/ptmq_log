@@ -55,7 +55,7 @@ model:                    # architecture details
         num_classes: 1000
     path: ./resnet18_weights.pth
 data:
-    path: ../imagenet
+    path: "/content/ptmq_log/imagenet"
     batch_size: 256
     num_workers: 16
     pin_memory: True
