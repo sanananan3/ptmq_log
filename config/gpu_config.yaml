@@ -53,7 +53,7 @@ model:                    # architecture details
     type: resnet18        # model name
     kwargs:
         num_classes: 1000
-    path: ./resnet18_weights.pth
+    path: "/content/ptmq_log/models/resnet18_imagenet.pth"
 data:
     path: "/content/ptmq_log/imagenet"
     batch_size: 256

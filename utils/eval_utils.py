@@ -74,9 +74,9 @@ class DataSaverHook:
 def load_data(path='', input_size=224, batch_size=64, num_workers=4, pin_memory=True, test_resize=256):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     
-    train_dir = "../imagenet/train"
+    train_dir = "/content/ptmq_log/imagenet/train"
     # train_dir = os.path.join(path, 'train')
-    val_dir = "../imagenet/val"
+    val_dir = "/content/ptmq_log/imagenet/val"
     
     train_transforms = transforms.Compose([
         transforms.RandomResizedCrop(input_size),

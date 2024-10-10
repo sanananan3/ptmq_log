@@ -134,6 +134,7 @@ class FixedFakeQuantize(QuantizeBase):
                 X = fake_quantize_per_tensor_affine(
                     X, self.scale.item(), self.zero_point.item(),
                     self.quant_min, self.quant_max)
+    
             if self.drop_prob < 1.0:
                 x_prob = torch.where(torch.rand_like(X) < self.drop_prob, X, x_orig)
                 return x_prob
@@ -184,6 +185,7 @@ class LSQFakeQuantize(QuantizeBase):
                     grad_factor = 1.0
                 X = fake_quantize_learnable_per_tensor_affine_train(
                     X, self.scale, self.zero_point.item(), self.quant_min, self.quant_max, grad_factor)
+
             if self.drop_prob < 1.0:
                 x_prob = torch.where(torch.rand_like(X) < self.drop_prob, X, x_orig)
                 return x_prob
@@ -233,6 +235,8 @@ class LSQPlusFakeQuantize(QuantizeBase):
                     grad_factor = 1.0
                 X = fake_quantize_learnableplus_per_tensor_affine_train(
                     X, self.scale, self.zero_point, self.quant_min, self.quant_max, grad_factor)
+
+            
             if self.drop_prob < 1.0:
                 x_prob = torch.where(torch.rand_like(X) < self.drop_prob, X, x_orig)
                 return x_prob

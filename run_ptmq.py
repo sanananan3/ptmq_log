@@ -129,7 +129,7 @@ def main(config_path):
     
     print("Starting block reconstruction...")
     tik = time.time()
-    # Block reconstruction (layer reconstruction for first & last layers)a
+    # Block reconstruction (layer reconstruction for first & last layers)
     if hasattr(config.quant, 'recon'):
         enable_quantization(model)
         
@@ -169,7 +169,7 @@ def main(config_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='configuration',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--config', default='config/gpu_config.yaml', type=str, help='Path to config file')
+    parser.add_argument('--config', default="/content/ptmq_log/config/gpu_config.yaml", type=str, help='Path to config file')
     args = parser.parse_args()
     
     main(args.config)
