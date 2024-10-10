@@ -6,7 +6,8 @@ import time
 import copy
 import logging
 import argparse
-
+import wandb
+import matplotlib.pyplot as plt
 import utils
 import utils.eval_utils as eval_utils
 from utils.ptmq_recon import ptmq_reconstruction
@@ -16,9 +17,111 @@ from quant.quant_state import enable_calib_without_quant, enable_quantization, d
 from quant.quant_module import QuantizedLayer, QuantizedBlock
 from quant.fake_quant import QuantizeBase
 from quant.observer import ObserverBase
+from utils.eval_utils import DataSaverHook, StopForwardException, parse_config
 
 logger = logging.getLogger('ptmq')
 
+
+""" 
+def log_weight_distribution(layer_weights, model_name, bit_width=None):
+
+    layer의 weight 데이터를 wandb에 바 차트로 로깅하는 함수
+    
+    Args:
+        layer_weights (torch.Tensor): 레이어의 weight 데이터
+        model_name (str): 모델 이름 (FP32 또는 Quantized)
+
+    if bit_width:
+        weight = layer_weights.cpu().numpy().flatten()  # weight 데이터를 numpy로 변환하고 평탄화        
+
+        q_min = 0
+        q_max = 2 ** bit_width - 1  # for 3-bit, q_min=0 and q_max=7
+
+        counts = np.zeros(q_max - q_min + 1, dtype=int)  # initialize counts array for bins 0 to 7
+        underflow = 0  # q_min 미만의 값 카운트
+        overflow = 0  # q_max 초과의 값 카운트
+
+        for val in weight:
+            if val < q_min:
+                underflow += 1
+            elif val > q_max:
+                overflow += 1
+            else:
+                counts[int(val)] += 1
+
+        # 막대그래프 그리기
+        bins = np.arange(q_min, q_max + 1)  # 0 ~ 7 까지의 값
+        plt.figure(figsize=(10, 6))
+        plt.bar(bins, counts, color='blue', edgecolor='black')
+        plt.title(f"{model_name} {bit_width}bit - weight distribution")
+        plt.xlabel("Weight Value")
+        plt.ylabel("Count")
+        
+        # Underflow와 Overflow 값 표시
+        plt.text(q_min, max(counts) * 0.9, f"Underflow: {underflow}", fontsize=12, color='red')
+        plt.text(q_max, max(counts) * 0.9, f"Overflow: {overflow}", fontsize=12, color='red')
+
+        # 그래프를 wandb에 로깅
+        wandb.log({f"{model_name} {bit_width}bit - weight distribution (bar)": wandb.Image(plt)})
+        plt.close()
+
+    else: 
+        weight = layer_weights.cpu().numpy().flatten()
+        num_bins=100
+
+        plt.figure(figsize=(10,6))
+        plt.hist(weight, bins=num_bins, color='blue', edgecolor='black')
+        plt.title("FP32 - weight distribution")
+        plt.xlabel("Weight value")
+        plt.ylabel("Count")
+
+        wandb.log({"FP32 - weight distribution-bins50": wandb.Image(plt)})
+        plt.close()
+
+        """
+
+def get_quantized_value_histogram(output, bit_width):
+
+    q_min= 0
+    q_max = 2 ** bit_width -1 
+
+
+    # 양자화 범위 내 값들의 발생 빈도 계산 
+
+    hist = {i:0 for i in range (q_min, q_max+1)}
+
+    hist['below_min'] = 0 
+    hist['above_max'] = 0
+
+    # 값 빈도 카운트 
+    print("a_qbit", bit_width)
+    layer_output_flatten = output.view(-1) # 텐서를 1D로 평탄화 
+    print("평탄화는 시킴 ", layer_output_flatten)
+
+    for value in layer_output_flatten:
+        value_int = int(value.item()) # 텐서 값을 int 로 변환 
+        if value_int < q_min:
+            hist['below_min'] += 1
+        elif value_int > q_max:
+            hist['above_max'] += 1
+        else: 
+            hist[value_int] += 1
+
+    print("hist는 return 돼따 ")
+    return hist 
+
+
+def log_histogram_to_wandb(hist, bit_width, iteration):
+    """
+        wandb에 히스토그램을 로깅하는 함수 
+        iteration => 현재 iteration 수 
+    """
+    wandb.log({
+        f"{bit_width} bit_quantized_value_histogram": wandb.Histogram(
+            np_histogram = (list(hist.keys()), list(hist.values()))
+        ),
+        "iteration": iteration
+    })
 
 def quantize_model(model, config):
     def replace_module(module, config, qoutput=True):
@@ -70,6 +173,7 @@ def quantize_model(model, config):
     # set first and last layer to 8-bit
     w_list[0].set_bit(8)
     w_list[-1].set_bit(8)
+
     
     # set the last layer's output to 8-bit
     a_list[-1].set_bit(8)
@@ -109,6 +213,15 @@ def main(config_path):
     fp_model = copy.deepcopy(model) # save copy of full precision model
     disable_all(fp_model) # disable all quantization
     
+    """
+    - fp 32 모델 weight 추출 
+    
+    for name, layer in fp_model.named_modules():
+        # collect layer weight quantization params
+        if isinstance(layer, (nn.Linear, nn.Conv2d)):
+            # print(f"w_para from: {name}")
+            #log_weight_distribution(layer.weight.data,'FP32')
+""" 
     # set names for all ObserverBase modules
     # ObserverBase modules are used to store intermediate values during calibration
     for name, module in model.named_modules():
@@ -154,17 +267,24 @@ def main(config_path):
               config.quant.a_qconfig_high.bit]
     
     enable_quantization(model)
+
+    """
     for a_qmode, a_qbit in zip(a_qmodes, a_qbits):
         set_qmodel_block_aqbit(model, a_qmode)
         
         for name, module in model.named_modules():
             if isinstance(module, QuantizedBlock):
                 print(name, module.out_mode)
-        
+
+
+                # QuantizedBlock의 출력 (f_l, f_m, f_h 등)을 가져와 히스토그램 계산
         print(f"Starting model evaluation of W{w_qbit}A{a_qbit} block reconstruction ({a_qmode})...")
         acc1, acc5 = eval_utils.validate_model(val_loader, model)
         
         print(f"Top-1 accuracy: {acc1:.2f}, Top-5 accuracy: {acc5:.2f}")
+
+          """
+    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='configuration',

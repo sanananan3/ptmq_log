@@ -5,109 +5,14 @@ import logging
 from tqdm import tqdm
 import wandb 
 import numpy as np 
-
+import matplotlib.pyplot as plt 
+from quant.fake_quant import AdaRoundFakeQuantize
 from utils.eval_utils import DataSaverHook, StopForwardException, parse_config
 from quant.quant_module import QuantizedModule, QuantizedBlock
 from quant.fake_quant import LSQFakeQuantize, LSQPlusFakeQuantize, QuantizeBase
 logger = logging.getLogger('ptmq')
 
-CONFIG_PATH = '/content/ptmq_log/config/gpu_config.yaml'
-cfg = parse_config(CONFIG_PATH)
 
-
-wandb.init(
-    # set the wandb project where this run will be logged
-    project="ptmq-pytorch(reconsturction 시에 quantized  - block 단위)",
-    # track hyperparameters and run metadata
-    config={
-        "architecture": "ResNet-18",
-        "dataset": "Imagenet",
-        "recon_iters": cfg.quant.recon.iters,
-    }
-)
-
-
-def get_quantized_value_histogram(output, bit_width):
-    """
-        양자화된 값의 히스토그램을 계산 
-        layer_output (torch.Tensor): 양자화된 값 (weight, activation)
-        bit_width: 양자화된 비트 수 (3비트 => 0~7)
-        
-        return : 각 값의 발생 빈도를 저장하는 히스토그램 딕셔너리 
-
-    """
-
-    q_min= 0
-    q_max = 2 ** bit_width -1 
-
-    # 양자화 범위 내 값들의 발생 빈도 계산 
-
-    hist = {i:0 for i in range (q_min, q_max+1)}
-
-    hist['below_min'] = 0 
-    hist['above_max'] = 0
-
-    # 값 빈도 카운트 
-
-    layer_output_flatten = output.view(-1) # 텐서를 1D로 평탄화 
-    for value in layer_output_flatten:
-        value_int = int(value.item()) # 텐서 값을 int 로 변환 
-        if value_int < q_min:
-            hist['below_min'] += 1
-        elif value_int > q_max:
-            hist['above_max'] += 1
-        else: 
-            hist[value_int] += 1
-
-    return hist 
-
-
-def log_histogram_to_wandb(hist, bit_width, iteration):
-    """
-        wandb에 히스토그램을 로깅하는 함수 
-        iteration => 현재 iteration 수 
-    """
-    wandb.log({
-        f"{bit_width} bit_quantized_value_histogram": wandb.Histogram(
-            np_histogram = (list(hist.keys()), list(hist.values()))
-        ),
-        "iteration": iteration
-    })
-
-
-"""
-output_file_path = 'content/drive/MyDrive/scales_zeropoints.txt'
-
-
-def save_to_txt_file(file_path, iteration, scales, zero_points):
-    with open (file_path, 'a') as f:
-        f.write(f"Iteration: {iteration}\n")
-        f.write("Scales: \n")
-        for key, value in scales.items():
-            f.write(f"{key}: {value}\n")
-        f.write("Zero Points: \n")
-        for key, value in zero_points.items():
-            f.write(f"{key}: {value}\n")
-        f.write("\n")
-
-"""
-
-def get_bit_width(q_module, qconfig):
-    # Check if q_module is a QuantizedBlock, which has `out_mode`
-    if isinstance(q_module, QuantizedBlock):
-        if q_module.out_mode == "low":
-            return qconfig.a_qconfig_low.bit
-        elif q_module.out_mode == "med":
-            return qconfig.a_qconfig_med.bit
-        elif q_module.out_mode == "high":
-            return qconfig.a_qconfig_high.bit
-        else:
-            return qconfig.a_qconfig.bit
-    # If it's a QuantizedLayer, return a default bit-width
-    else:
-        print("그냥 default 8로 들어옴")
-        return 8  # Default bit-width for layers (like Conv2D or Linear)
-    
 
 def save_inp_oup_data(model, module, calib_data: list, store_inp=False, store_oup=False,
                       bs: int = 32, keep_gpu: bool = True):
@@ -298,6 +203,7 @@ def ptmq_reconstruction(q_model, fp_model, q_module, name, fp_module, calib_data
             weight_quantizer = q_layer.weight_fake_quant
             weight_quantizer.init(q_layer.weight.data, qconfig.recon.round_mode)
             w_para += [weight_quantizer.alpha]
+     
         # collect activation quantization params
         if isinstance(q_layer, QuantizeBase) and 'post_act_fake_quantize' in name:
             # layer.drop_prob = qconfig.recon.drop_prob
@@ -306,6 +212,8 @@ def ptmq_reconstruction(q_model, fp_model, q_module, name, fp_module, calib_data
                 a_para += [q_layer.scale]
             if isinstance(q_layer, LSQPlusFakeQuantize):
                 a_para += [q_layer.scale, q_layer.zero_point]
+                # 양자화되지 않은 FP32 모델의 weight도 동일하게 로깅
+    
     
     # Set optimizers for quantization parameters of weights and activations
     if len(a_para) != 0:
@@ -349,6 +257,9 @@ def ptmq_reconstruction(q_model, fp_model, q_module, name, fp_module, calib_data
             f_m = q_module.f_m
             f_h = q_module.f_h
             f_mixed = q_block_output
+
+      
+
         # Compute loss
         loss = loss_func(f_fp, q_block_output, f_l, f_m, f_h, f_mixed)
 
@@ -365,13 +276,8 @@ def ptmq_reconstruction(q_model, fp_model, q_module, name, fp_module, calib_data
         if a_opt:
             a_opt.step()
             a_scheduler.step()
-        
-        bit_width = get_bit_width(q_module, qconfig)
-        print("현재 bit_width: " , bit_width)
-        # hist = get_quantized_value_histogram(q_block_output, bit_width)
-        # log_histogram_to_wandb(hist,bit_width, i)
 
-
+      
     # DISABLE LEARNED WEIGHT AND ACTIVATION QUANTIZATION
     torch.cuda.empty_cache()
     for name, layer in q_module.named_modules():
@@ -379,6 +285,7 @@ def ptmq_reconstruction(q_model, fp_model, q_module, name, fp_module, calib_data
             # disable learned AdaRound
             weight_quantizer = layer.weight_fake_quant
             layer.weight.data = weight_quantizer.get_hard_value(layer.weight.data)
+            
             weight_quantizer.adaround = False
         if isinstance(layer, QuantizeBase) and 'post_act_fake_quantize' in name:
             # disable learned LSQ

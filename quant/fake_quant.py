@@ -1,5 +1,10 @@
 import torch
 import torch.nn as nn
+import wandb 
+import numpy as np 
+import matplotlib.pyplot as plt
+from utils.eval_utils import DataSaverHook, StopForwardException, parse_config
+
 from quant.observer import ObserverBase
 from quant.quant_func import (
     fake_quantize_per_tensor_affine,
@@ -9,6 +14,8 @@ from quant.quant_func import (
     fake_quantize_learnableplus_per_tensor_affine_train,
     fake_quantize_learnableplus_per_channel_affine_train,
 )
+
+
 
 
 class QuantizeBase(nn.Module):
@@ -298,6 +305,11 @@ class AdaRoundFakeQuantize(QuantizeBase):
             X += self.rectified_sigmoid()
         X += zero_point
         X = torch.clamp(X, self.quant_min, self.quant_max)
+        
+        # if torch.all(torch.eq(X, X.int())):
+            #log_weight_distribution(X, "Quantized", bit_width=3)
+    
+
         X = (X - zero_point) * scale
         return X
 

@@ -1,9 +1,58 @@
 import torch
 import torch.nn as nn
 import gc
+import wandb 
 
+from utils.eval_utils import parse_config
 from models.resnet import BasicBlock, Bottleneck, resnet18, resnet50
 from quant.quant_module import QuantizedLayer, QuantizedBlock, Quantizer
+import numpy as np 
+import matplotlib.pyplot as plt 
+
+
+CONFIG_PATH = '/content/ptmq_log/config/gpu_config.yaml'
+cfg = parse_config(CONFIG_PATH)
+
+wandb.init(
+    # set the wandb project where this run will be logged
+    project="ptmq-pytorch(양자화된 weight, fp32 모델의 weight)-fp32-bin100",
+    # track hyperparameters and run metadata
+    config={
+        "architecture": "ResNet-18",
+        "dataset": "Imagenet",
+        "recon_iters": cfg.quant.recon.iters,
+    }
+)
+
+def log_feature_distribution(feature_map, model_name, bit_width):
+    feature_flat = feature_map.cpu().numpy().flatten()
+
+    q_min=0
+    q_max=2**bit_width-1
+
+    counts = np.zeros(q_max-q_min+1, dtype=int)
+
+    overflow = 0
+
+    underflow = 0
+    for val in feature_flat:
+        if q_min <= val <= q_max:
+            counts[int(val)]+=1
+
+        elif val>q_max:
+            overflow +=1 
+        elif val<q_min:
+            underflow +=1
+    bins = np.arange(q_min, q_max+2)
+    plt.figure(figsize=(10,6))
+    plt.bar(bins, counts, color='blue', edgecolor = 'black')
+    plt.title(f"{model_name} {bit_width}bit - Feature Map Distribution")
+    plt.xlabel("Quantized Value")
+    plt.ylabel("Count")
+
+        # wandb에 기록
+    wandb.log({f"{model_name} {bit_width}bit - feature map distribution (bar)": wandb.Image(plt)})
+    plt.close()
 
 
 class QuantBasicBlock(QuantizedBlock):
@@ -56,14 +105,19 @@ class QuantBasicBlock(QuantizedBlock):
                 
                 f_lmh = self.lambda1 * self.f_l + self.lambda2 * self.f_m + self.lambda3 * self.f_h
                 f_mixed = torch.where(torch.rand_like(out) < self.mixed_p, out, f_lmh)
-                
                 out = f_mixed
+                log_feature_distribution(out, "mixed", 32)
             elif self.out_mode == "low":
                 out = self.block_post_act_fake_quantize_low(out)
+                log_feature_distribution(out, "low", 3)
             elif self.out_mode == "med":
                 out = self.block_post_act_fake_quantize_med(out)
+                log_feature_distribution(out, "low", 4)
+
             elif self.out_mode == "high":
                 out = self.block_post_act_fake_quantize_high(out)
+                log_feature_distribution(out, "low", 5)
+
             else:
                 raise ValueError(f"Invalid out_mode '{self.out_mode}': only ['low', 'med', 'high'] are supported")
         return out
